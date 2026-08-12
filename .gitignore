@@ -1,0 +1,10 @@
+*.pyc
+*.pyo
+__pycache__/
+dist/
+__pycache__/
+*.py[cod]
+build/
+*.ipk
+.DS_Store
+Thumbs.db

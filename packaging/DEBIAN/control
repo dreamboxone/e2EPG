@@ -1,0 +1,13 @@
+Package: enigma2-plugin-extensions-e2epg
+Version: 0.5.3
+Architecture: all
+Section: base
+Priority: optional
+Maintainer: dreamboxone
+Depends: enigma2, curl, ca-certificates, python3-sqlite3 | python-sqlite3
+Provides: enigma2-plugin-extensions-persianepg
+Conflicts: enigma2-plugin-extensions-persianepg
+Replaces: enigma2-plugin-extensions-persianepg
+Description: e2EPG multilingual Persian EPG translator for Enigma2
+ e2EPG uses Gemini to show cached Persian EPG text through an Enigma2 converter.
+ The package contains architecture-neutral Python code for DreamOS and OE-A.
