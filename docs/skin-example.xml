@@ -1,0 +1,12 @@
+<!-- Replace EventName with e2EPG in the target InfoBar widgets. -->
+<widget source="session.Event_Now" render="Label" position="90,515" size="650,30" font="Regular;24">
+    <convert type="e2EPG">Name</convert>
+</widget>
+
+<widget source="session.Event_Now" render="Label" position="90,548" size="650,52" font="Regular;20">
+    <convert type="e2EPG">ShortDescription</convert>
+</widget>
+
+<widget source="session.Event_Next" render="Label" position="90,606" size="650,30" font="Regular;22">
+    <convert type="e2EPG">Name</convert>
+</widget>

@@ -1,0 +1,46 @@
+#!/bin/sh
+set -e
+
+CONFIG_DIR=/etc/enigma2/e2EPG
+PATCH_LIST=$CONFIG_DIR/patched-infobar-skins.list
+
+case "$1" in
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear) exit 0 ;;
+esac
+
+if [ -f "$PATCH_LIST" ]; then
+    while IFS= read -r skin; do
+        [ -f "$skin" ] || continue
+        sed -i '/<screen name="InfoBar"/,/<\/screen>/ s/<convert type="e2EPG">/<convert type="EventName">/g' "$skin"
+        sed -i '/<screen name="ChannelSelection"/,/<\/screen>/ s/<convert type="e2EPG">/<convert type="EventName">/g' "$skin"
+        sed -i '/<screen name="ChannelSelection"/,/<\/screen>/ s/render="e2EPGEventListDisplay"/render="EventListDisplay"/g' "$skin"
+    done < "$PATCH_LIST"
+fi
+# Runtime compatibility also patches modular XML files added after package
+# installation. Reverse only e2EPG markers and preserve every other skin edit.
+find /usr/share/enigma2 -maxdepth 3 -type f -name '*.xml' 2>/dev/null | while IFS= read -r skin; do
+    sed -i '/<screen[^>]*name=["'"']InfoBar["'"']/,/<\/screen>/ s/<convert type="e2EPG">/<convert type="EventName">/g' "$skin"
+    sed -i '/<screen[^>]*name=["'"']ChannelSelection["'"']/,/<\/screen>/ s/<convert type="e2EPG">/<convert type="EventName">/g' "$skin"
+    sed -i '/<screen[^>]*name=["'"']ChannelSelection["'"']/,/<\/screen>/ s/render="e2EPGEventListDisplay"/render="EventListDisplay"/g' "$skin"
+done
+rm -f "$PATCH_LIST" /tmp/e2EPG.log /tmp/e2EPG.log.1
+
+if [ "$1" = "purge" ]; then
+    rm -rf "$CONFIG_DIR"
+    for data_dir in /media/hdd/e2EPG /data/e2EPG /media/usb/e2EPG; do rm -rf "$data_dir"; done
+fi
+
+echo "e2EPG removed. /root/apikey.txt was preserved."
+restart_enigma2() {
+    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files enigma2.service >/dev/null 2>&1; then
+        systemctl restart enigma2
+    elif [ -x /etc/init.d/enigma2 ]; then
+        /etc/init.d/enigma2 restart
+    elif command -v init >/dev/null 2>&1; then
+        init 4
+        sleep 2
+        init 3
+    fi
+}
+(sleep 3; restart_enigma2) >/dev/null 2>&1 &
+exit 0

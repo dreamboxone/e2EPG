@@ -1,0 +1,91 @@
+name: Build Enigma2 packages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Test Python core
+        run: |
+          set -e
+          python3 -m unittest discover -s tests -v
+          python3 -m compileall -q rootfs tests scripts/build-packages.py
+
+      - name: Validate portable package metadata and scripts
+        run: |
+          set -e
+          grep -qx 'Package: enigma2-plugin-extensions-e2epg' packaging/DEBIAN/control
+          grep -qx 'Architecture: all' packaging/DEBIAN/control
+          grep -q 'python3-sqlite3 | python-sqlite3' packaging/DEBIAN/control
+          grep -q 'curl' packaging/DEBIAN/control
+          grep -q 'ca-certificates' packaging/DEBIAN/control
+          sh -n packaging/DEBIAN/postinst
+          sh -n packaging/DEBIAN/postrm
+
+      - name: Build DEB and IPK
+        run: python3 scripts/build-packages.py
+
+      - name: Inspect packages
+        run: |
+          set -e
+          DEB="dist/enigma2-plugin-extensions-e2epg_0.5.3_all.deb"
+          IPK="dist/enigma2-plugin-extensions-e2epg_0.5.3_all.ipk"
+          test -f "$DEB"
+          test -f "$IPK"
+          dpkg-deb --info "$DEB"
+          dpkg-deb --contents "$DEB"
+          test "$(dpkg-deb -f "$DEB" Architecture)" = all
+          test "$(dpkg-deb -f "$DEB" Package)" = enigma2-plugin-extensions-e2epg
+          mkdir -p build/ipk-check
+          cd build/ipk-check
+          ar x "../../$IPK"
+          tar -xzf control.tar.gz
+          grep -qx 'Architecture: all' control
+          grep -qx 'Package: enigma2-plugin-extensions-e2epg' control
+          tar -tzf data.tar.gz | grep -q './usr/lib/enigma2/python/Plugins/Extensions/e2EPG/gemini.py'
+          tar -tzf data.tar.gz | grep -q './usr/lib/enigma2/python/Components/Converter/e2EPG.py'
+          ! tar -tzf data.tar.gz | grep -q '__pycache__\|\.py[co]$\|Extensions/PersianEPG'
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2epg-all-packages
+          path: |
+            dist/*.deb
+            dist/*.ipk
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/*.deb dist/*.ipk --clobber
+
+      - name: Add package summary
+        run: |
+          {
+            echo "## e2EPG architecture-neutral packages"
+            echo
+            echo '```text'
+            ls -lh dist/*.deb dist/*.ipk
+            sha256sum dist/*.deb dist/*.ipk
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

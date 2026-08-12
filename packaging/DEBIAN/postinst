@@ -1,0 +1,120 @@
+#!/bin/sh
+set -e
+
+CONFIG_DIR=/etc/enigma2/e2EPG
+LEGACY_CONFIG_DIR=/etc/enigma2/PersianEPG
+BACKUP_DIR=$CONFIG_DIR/skin-backups
+PATCH_LIST=$CONFIG_DIR/patched-infobar-skins.list
+PLUGIN_DIR=/usr/lib/enigma2/python/Plugins/Extensions/e2EPG
+LEGACY_PLUGIN_DIR=/usr/lib/enigma2/python/Plugins/Extensions/PersianEPG
+PROVIDER_STATE=$CONFIG_DIR/provider
+
+mkdir -p "$CONFIG_DIR" "$BACKUP_DIR"
+chmod 700 "$CONFIG_DIR" "$BACKUP_DIR"
+
+# Import migration metadata/backups from PersianEPG. User settings remain under
+# config.plugins.persianepg for backward compatibility and need no file rewrite.
+if [ -d "$LEGACY_CONFIG_DIR" ]; then
+    [ -f "$LEGACY_CONFIG_DIR/provider" ] && [ ! -f "$PROVIDER_STATE" ] && cp "$LEGACY_CONFIG_DIR/provider" "$PROVIDER_STATE"
+    if [ -d "$LEGACY_CONFIG_DIR/skin-backups" ]; then
+        cp -p "$LEGACY_CONFIG_DIR/skin-backups"/* "$BACKUP_DIR"/ 2>/dev/null || true
+    fi
+fi
+
+old_provider=$(cat "$PROVIDER_STATE" 2>/dev/null || true)
+
+# Remove obsolete providers and old-brand runtime files. /root/apikey.txt is
+# outside these paths and is deliberately never touched.
+rm -rf "$LEGACY_PLUGIN_DIR" /usr/lib/persianepg
+rm -f /usr/lib/enigma2/python/Components/Converter/PersianEPG.py*
+rm -f "$PLUGIN_DIR/google.py"* "$PLUGIN_DIR/engine.py"* "$PLUGIN_DIR/model_install.py"*
+rm -rf "$PLUGIN_DIR/__pycache__"
+
+for data_dir in /media/hdd/PersianEPG /data/PersianEPG /media/usb/PersianEPG "$LEGACY_CONFIG_DIR"; do
+    if [ "$old_provider" != "gemini-3.1-flash-lite" ]; then
+        rm -f "$data_dir/cache.db" "$data_dir/cache.db-wal" "$data_dir/cache.db-shm"
+    fi
+    rm -rf "$data_dir/models"
+done
+
+# Preserve a valid Gemini cache across the brand rename.
+if [ "$old_provider" = "gemini-3.1-flash-lite" ]; then
+    for old_data in /media/hdd/PersianEPG /data/PersianEPG /media/usb/PersianEPG "$LEGACY_CONFIG_DIR"; do
+        [ -f "$old_data/cache.db" ] || continue
+        case "$old_data" in
+            /media/hdd/*) new_data=/media/hdd/e2EPG ;;
+            /data/*) new_data=/data/e2EPG ;;
+            /media/usb/*) new_data=/media/usb/e2EPG ;;
+            *) new_data=$CONFIG_DIR ;;
+        esac
+        mkdir -p "$new_data"
+        [ -f "$new_data/cache.db" ] || cp "$old_data/cache.db" "$new_data/cache.db"
+        break
+    done
+fi
+
+printf '%s\n' 'gemini-3.1-flash-lite' > "$PROVIDER_STATE"
+chmod 600 "$PROVIDER_STATE"
+rm -f /tmp/PersianEPG.log /tmp/PersianEPG.log.1 /tmp/e2EPG.log /tmp/e2EPG.log.1
+
+# Normalize old/global patches, then patch the InfoBar and Channel Selection
+# EventName widgets. Native ServiceList rows are rendered by Enigma2 itself;
+# the selected event title/description widgets do support converters.
+: > "$PATCH_LIST"
+for skin in /usr/share/enigma2/*/skin.xml /usr/share/enigma2/skin.xml; do
+    [ -f "$skin" ] || continue
+    sed -i 's#<convert type="PersianEPG">Name</convert>#<convert type="EventName">Name</convert>#g' "$skin"
+    if sed -n '/<screen name="InfoBar"/,/<\/screen>/p' "$skin" | grep -q '<convert type="EventName">'; then
+        backup_name=$(printf '%s' "$skin" | sed 's#/#_#g; s#^_##')
+        backup="$BACKUP_DIR/$backup_name.orig"
+        [ -f "$backup" ] || cp "$skin" "$backup"
+        chmod 600 "$backup"
+        sed -i '/<screen name="InfoBar"/,/<\/screen>/ s/<convert type="EventName">/<convert type="e2EPG">/g' "$skin"
+        printf '%s\n' "$skin" >> "$PATCH_LIST"
+        echo "e2EPG: patched InfoBar in $skin"
+    elif sed -n '/<screen name="InfoBar"/,/<\/screen>/p' "$skin" | grep -q '<convert type="e2EPG">'; then
+        printf '%s\n' "$skin" >> "$PATCH_LIST"
+    fi
+    if sed -n '/<screen name="ChannelSelection"/,/<\/screen>/p' "$skin" | grep -q '<convert type="EventName">'; then
+        backup_name=$(printf '%s' "$skin" | sed 's#/#_#g; s#^_##')
+        backup="$BACKUP_DIR/$backup_name.orig"
+        [ -f "$backup" ] || cp "$skin" "$backup"
+        chmod 600 "$backup"
+        sed -i '/<screen name="ChannelSelection"/,/<\/screen>/ s/<convert type="EventName">/<convert type="e2EPG">/g' "$skin"
+        grep -qxF "$skin" "$PATCH_LIST" || printf '%s\n' "$skin" >> "$PATCH_LIST"
+        echo "e2EPG: patched ChannelSelection in $skin"
+    fi
+    if sed -n '/<screen name="ChannelSelection"/,/<\/screen>/p' "$skin" | grep -q 'render="EventListDisplay"'; then
+        backup_name=$(printf '%s' "$skin" | sed 's#/#_#g; s#^_##')
+        backup="$BACKUP_DIR/$backup_name.orig"
+        [ -f "$backup" ] || cp "$skin" "$backup"
+        chmod 600 "$backup"
+        sed -i '/<screen name="ChannelSelection"/,/<\/screen>/ s/render="EventListDisplay"/render="e2EPGEventListDisplay"/g' "$skin"
+        grep -qxF "$skin" "$PATCH_LIST" || printf '%s\n' "$skin" >> "$PATCH_LIST"
+        echo "e2EPG: patched ChannelSelection EPG Next list in $skin"
+    fi
+done
+chmod 600 "$PATCH_LIST"
+
+[ -s "$PATCH_LIST" ] || echo "e2EPG warning: no standard InfoBar EventName converter was found."
+if [ -f /root/apikey.txt ]; then
+    chmod 600 /root/apikey.txt
+else
+    echo "e2EPG warning: create /root/apikey.txt and put only the Gemini API key in it."
+fi
+
+restart_enigma2() {
+    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files enigma2.service >/dev/null 2>&1; then
+        systemctl restart enigma2
+    elif [ -x /etc/init.d/enigma2 ]; then
+        /etc/init.d/enigma2 restart
+    elif command -v init >/dev/null 2>&1; then
+        init 4
+        sleep 2
+        init 3
+    fi
+}
+
+echo "e2EPG 0.5.3 installed. Enigma2 will restart automatically."
+(sleep 3; restart_enigma2) >/dev/null 2>&1 &
+exit 0
